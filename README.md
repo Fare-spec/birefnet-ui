@@ -49,6 +49,18 @@ When several images are selected in the UI, the browser sends several requests i
 
 Do not commit `.ts` model files to Git. They are large and should be treated as deployment artifacts.
 
+The official upstream BiRefNet repositories currently provide Hugging Face source weights, not ready-to-use TorchScript artifacts for this Rust server:
+
+| App model id | Official source repo | Source weight URL | Runtime TorchScript path |
+| --- | --- | --- | --- |
+| `birefnet-lite` | `ZhengPeng7/BiRefNet_lite` | `https://huggingface.co/ZhengPeng7/BiRefNet_lite/resolve/main/model.safetensors` | `/app/models/birefnet-lite.ts` |
+| `birefnet-base` | `ZhengPeng7/BiRefNet` | `https://huggingface.co/ZhengPeng7/BiRefNet/resolve/main/model.safetensors` | `/app/models/birefnet-base.ts` |
+| `birefnet-hr` | `ZhengPeng7/BiRefNet_HR` | `https://huggingface.co/ZhengPeng7/BiRefNet_HR/resolve/main/model.safetensors` | `/app/models/birefnet-hr.ts` |
+
+Important: `BIREFNET_MODEL_URLS` must point to exported TorchScript `.ts` files, not to the upstream `.safetensors` files. The `.safetensors` URLs above are the official sources to export from, or to audit the upstream model, but the Rust runtime cannot load them directly.
+
+License note: the upstream BiRefNet GitHub repository is MIT licensed, and the main `ZhengPeng7/BiRefNet` plus `ZhengPeng7/BiRefNet_HR` Hugging Face pages show `License: mit`. The `BiRefNet_lite` page is part of the same official BiRefNet model family, but its crawled Hugging Face page does not display a license badge. For commercial use, keep a copy of the upstream license notice and verify the exact artifact you deploy.
+
 Supported model provisioning modes:
 
 - Mount TorchScript model files into `/app/models`.
@@ -61,11 +73,7 @@ Supported model provisioning modes:
 id|label|url[|filename];id2|label2|url2[|filename2]
 ```
 
-Example:
-
-```bash
-BIREFNET_MODEL_URLS='birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts'
-```
+Use `BIREFNET_MODEL_URLS` only when you have hosted your own exported `.ts` artifacts.
 
 `BIREFNET_MODELS` format:
 
@@ -104,13 +112,13 @@ docker run --rm \
   birefnet-ui
 ```
 
-Run with model download at container startup:
+Run with TorchScript model download at container startup after hosting your own `.ts` artifacts:
 
 ```bash
 docker run --rm \
   -p 3000:3000 \
   -v birefnet-models:/app/models \
-  -e 'BIREFNET_MODEL_URLS=birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts' \
+  -e 'BIREFNET_MODEL_URLS=birefnet-lite|BiRefNet Lite|https://your-domain.tld/birefnet-lite.ts|birefnet-lite.ts' \
   birefnet-ui
 ```
 
@@ -152,7 +160,7 @@ Start it:
 docker compose up -d
 ```
 
-With model download at startup and a persistent Docker volume:
+Default Compose setup with the three TorchScript models mounted from a local `./models` directory:
 
 ```yaml
 services:
@@ -163,15 +171,12 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      BIREFNET_MODEL_URLS: >-
-        birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts;
-        birefnet-base|BiRefNet Base|https://example.com/models/birefnet-base.ts|birefnet-base.ts;
-        birefnet-hr|BiRefNet HR|https://example.com/models/birefnet-hr.ts|birefnet-hr.ts
+      BIREFNET_MODELS: >-
+        birefnet-lite|BiRefNet Lite|/app/models/birefnet-lite.ts;
+        birefnet-base|BiRefNet Base|/app/models/birefnet-base.ts;
+        birefnet-hr|BiRefNet HR|/app/models/birefnet-hr.ts
     volumes:
-      - birefnet-models:/app/models
-
-volumes:
-  birefnet-models:
+      - ./models:/app/models:ro
 ```
 
 The `127.0.0.1:3000:3000` binding is intentional for remote servers: expose the app through an HTTPS reverse proxy instead of publishing plain HTTP directly to the internet.
@@ -246,8 +251,8 @@ docker run -d \
   --name birefnet-ui \
   --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
-  -v birefnet-models:/app/models \
-  -e 'BIREFNET_MODEL_URLS=birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts' \
+  -v /srv/birefnet-models:/app/models:ro \
+  -e 'BIREFNET_MODELS=birefnet-lite|BiRefNet Lite|/app/models/birefnet-lite.ts;birefnet-base|BiRefNet Base|/app/models/birefnet-base.ts;birefnet-hr|BiRefNet HR|/app/models/birefnet-hr.ts' \
   ghcr.io/fare-spec/birefnet-ui:main
 ```
 
