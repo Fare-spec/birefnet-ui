@@ -130,6 +130,49 @@ Open:
 http://127.0.0.1:3000/ui
 ```
 
+### Docker Compose
+
+With model files mounted from a local `./models` directory:
+
+```yaml
+services:
+  birefnet-ui:
+    image: ghcr.io/fare-spec/birefnet-ui:main
+    container_name: birefnet-ui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./models:/app/models:ro
+```
+
+Start it:
+
+```bash
+docker compose up -d
+```
+
+With model download at startup and a persistent Docker volume:
+
+```yaml
+services:
+  birefnet-ui:
+    image: ghcr.io/fare-spec/birefnet-ui:main
+    container_name: birefnet-ui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      BIREFNET_MODEL_URLS: "birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts"
+    volumes:
+      - birefnet-models:/app/models
+
+volumes:
+  birefnet-models:
+```
+
+The `127.0.0.1:3000:3000` binding is intentional for remote servers: expose the app through an HTTPS reverse proxy instead of publishing plain HTTP directly to the internet.
+
 ### What The Docker Image Contains
 
 The Dockerfile is multi-stage:
