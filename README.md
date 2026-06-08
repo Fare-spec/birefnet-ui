@@ -65,10 +65,10 @@ License note: the upstream BiRefNet GitHub repository is MIT licensed, and the m
 
 There is no official public URL for ready-to-use BiRefNet TorchScript `.ts` artifacts. The repo provides a separate exporter image that uses Python only during export. The application runtime image remains Python-free.
 
-Build the exporter:
+The exporter image is published by GitHub Actions as:
 
-```bash
-docker build -f Dockerfile.models -t birefnet-model-exporter .
+```text
+ghcr.io/fare-spec/birefnet-ui:model-exporter-main
 ```
 
 Export the three default models into the same Docker volume used by the app:
@@ -77,7 +77,7 @@ Export the three default models into the same Docker volume used by the app:
 docker run --rm \
   -v birefnet-models:/app/models \
   -v birefnet-export-cache:/cache \
-  birefnet-model-exporter
+  ghcr.io/fare-spec/birefnet-ui:model-exporter-main
 ```
 
 This writes:
@@ -96,7 +96,13 @@ To force regeneration:
 docker run --rm \
   -v birefnet-models:/app/models \
   -v birefnet-export-cache:/cache \
-  birefnet-model-exporter --force
+  ghcr.io/fare-spec/birefnet-ui:model-exporter-main --force
+```
+
+If you are developing locally and want to build the exporter yourself:
+
+```bash
+docker build -f Dockerfile.models -t birefnet-model-exporter .
 ```
 
 Supported model provisioning modes:
@@ -371,12 +377,13 @@ Then configure your reverse proxy to forward HTTPS traffic to `127.0.0.1:3000`.
 
 ## GitHub Container Registry
 
-The repository includes a GitHub Actions workflow that builds and publishes the Docker image to GHCR on pushes to `main`.
+The repository includes a GitHub Actions workflow that builds and publishes both Docker images to GHCR on pushes to `main`.
 
-Expected image name:
+Expected image names:
 
 ```text
 ghcr.io/fare-spec/birefnet-ui:main
+ghcr.io/fare-spec/birefnet-ui:model-exporter-main
 ```
 
 If the package is private, authenticate before pulling:
@@ -384,6 +391,7 @@ If the package is private, authenticate before pulling:
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u Fare-spec --password-stdin
 docker pull ghcr.io/fare-spec/birefnet-ui:main
+docker pull ghcr.io/fare-spec/birefnet-ui:model-exporter-main
 ```
 
 ## Local Development

@@ -30,7 +30,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker metadata
-        id: meta
+        id: app-meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
@@ -39,10 +39,28 @@ jobs:
             type=ref,event=tag
             type=sha
 
-      - name: Build and optionally push
+      - name: Exporter metadata
+        id: exporter-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=model-exporter-${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=model-exporter-sha-${{ github.sha }}
+
+      - name: Build and optionally push app
         uses: docker/build-push-action@v6
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.app-meta.outputs.tags }}
+          labels: ${{ steps.app-meta.outputs.labels }}
+
+      - name: Build and optionally push model exporter
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.models
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.exporter-meta.outputs.tags }}
+          labels: ${{ steps.exporter-meta.outputs.labels }}
