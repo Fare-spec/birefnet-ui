@@ -163,7 +163,10 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      BIREFNET_MODEL_URLS: "birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts"
+      BIREFNET_MODEL_URLS: >-
+        birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts;
+        birefnet-base|BiRefNet Base|https://example.com/models/birefnet-base.ts|birefnet-base.ts;
+        birefnet-hr|BiRefNet HR|https://example.com/models/birefnet-hr.ts|birefnet-hr.ts
     volumes:
       - birefnet-models:/app/models
 
