@@ -228,6 +228,40 @@ It does the following:
 
 This keeps the image small enough to publish normally while keeping heavy models outside Git and outside the image.
 
+### Troubleshooting Model Files
+
+If the container exits with:
+
+```text
+PytorchStreamReader failed reading zip archive: failed finding central directory
+```
+
+then the file exists, but it is not a TorchScript archive. The most common cause is downloading Hugging Face `model.safetensors` and naming it `birefnet-*.ts`.
+
+Check the first bytes of the files:
+
+```bash
+docker run --rm \
+  -v birefnet-models:/app/models \
+  alpine sh -c 'for f in /app/models/*.ts; do printf "%s " "$f"; od -An -tx1 -N4 "$f"; done'
+```
+
+Valid TorchScript files should start with zip magic:
+
+```text
+50 4b 03 04
+```
+
+If they do not, remove the bad volume files and replace them with exported TorchScript files:
+
+```bash
+docker run --rm \
+  -v birefnet-models:/app/models \
+  alpine sh -c 'rm -f /app/models/birefnet-*.ts'
+```
+
+The upstream `.safetensors` URLs listed in the Models section are source weights. They must be exported to TorchScript before this Rust runtime can load them.
+
 ## Remote Server Deployment
 
 For a remote server, run the container behind an HTTPS reverse proxy. The UI allows:
