@@ -65,6 +65,8 @@ License note: the upstream BiRefNet GitHub repository is MIT licensed, and the m
 
 There is no official public URL for ready-to-use BiRefNet TorchScript `.ts` artifacts. The repo provides a separate exporter image that uses Python only during export. The application runtime image remains Python-free.
 
+You should not store these `.ts` files as normal Git-tracked files in the repository itself. GitHub enforces a 100 MiB single-object limit for regular Git objects, and these model files are much larger. If you want simple `wget` downloads, host the exported `.ts` files outside normal Git history, for example as release assets or on object storage.
+
 The exporter image is published by GitHub Actions as:
 
 ```text
@@ -103,6 +105,13 @@ If you are developing locally and want to build the exporter yourself:
 
 ```bash
 docker build -f Dockerfile.models -t birefnet-model-exporter .
+```
+
+If you already host exported `.ts` files somewhere, there is also a simple downloader script:
+
+```bash
+BIREFNET_MODEL_BASE_URL=https://your-host.example/models \
+./scripts/fetch_torchscript_models.sh
 ```
 
 Supported model provisioning modes:
