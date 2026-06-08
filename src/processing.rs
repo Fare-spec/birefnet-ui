@@ -1,5 +1,7 @@
 use std::io::{Cursor, Write};
 use std::path::Path;
+#[cfg(feature = "tch-backend")]
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use image::codecs::png::PngEncoder;
@@ -73,6 +75,8 @@ impl BackgroundRemover for EdgeColorBackgroundRemover {
 pub struct TorchScriptBackgroundRemover {
     model: tch::CModule,
     device: tch::Device,
+    _python: Option<libloading::Library>,
+    _torchvision: Option<libloading::Library>,
 }
 
 #[cfg(feature = "tch-backend")]
@@ -83,10 +87,88 @@ impl TorchScriptBackgroundRemover {
         } else {
             tch::Device::Cpu
         };
+        let python = load_python_library().transpose()?;
+        let torchvision = load_torchvision_ops().transpose()?;
         let model = tch::CModule::load_on_device(path, device)
             .context("chargement du modele TorchScript impossible")?;
-        Ok(Self { model, device })
+        Ok(Self {
+            model,
+            device,
+            _python: python,
+            _torchvision: torchvision,
+        })
     }
+}
+
+#[cfg(feature = "tch-backend")]
+fn load_torchvision_ops() -> Option<Result<libloading::Library>> {
+    let path = find_torchvision_library()?;
+    Some(load_library_global(&path).with_context(|| {
+        format!(
+            "chargement de la bibliotheque torchvision impossible: {}",
+            path.display()
+        )
+    }))
+}
+
+#[cfg(feature = "tch-backend")]
+fn load_python_library() -> Option<Result<libloading::Library>> {
+    let path = find_python_library()?;
+    Some(load_library_global(&path).with_context(|| {
+        format!(
+            "chargement de la bibliotheque Python impossible: {}",
+            path.display()
+        )
+    }))
+}
+
+#[cfg(feature = "tch-backend")]
+fn load_library_global(path: &Path) -> Result<libloading::Library, libloading::Error> {
+    #[cfg(unix)]
+    {
+        use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
+        let library = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_GLOBAL) }?;
+        Ok(library.into())
+    }
+
+    #[cfg(not(unix))]
+    {
+        unsafe { libloading::Library::new(path) }
+    }
+}
+
+#[cfg(feature = "tch-backend")]
+fn find_torchvision_library() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("TORCHVISION_LIBRARY_PATH").map(PathBuf::from) {
+        return Some(path);
+    }
+
+    let candidates = [
+        "/usr/local/lib/python3.13/site-packages/torchvision/_C.so",
+        "/usr/local/lib/python3.12/site-packages/torchvision/_C.so",
+    ];
+
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.exists())
+}
+
+#[cfg(feature = "tch-backend")]
+fn find_python_library() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("PYTHON_LIBRARY_PATH").map(PathBuf::from) {
+        return Some(path);
+    }
+
+    let candidates = [
+        "/usr/local/lib/libpython3.13.so.1.0",
+        "/usr/local/lib/libpython3.12.so.1.0",
+    ];
+
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.exists())
 }
 
 #[cfg(feature = "tch-backend")]

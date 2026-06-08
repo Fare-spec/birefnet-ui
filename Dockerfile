@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1-bookworm AS builder
+FROM python:3.13-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LIBTORCH_USE_PYTORCH=1
 ENV LIBTORCH_BYPASS_VERSION_CHECK=1
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -11,20 +13,21 @@ RUN apt-get update \
         ca-certificates \
         curl \
         pkg-config \
-        unzip \
     && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir torch torchvision
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal
 
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN cargo build --release --features download-libtorch \
-    && LIBTORCH_DIR="$(find target/release/build -path '*/out/libtorch/libtorch' -type d | head -n 1)" \
-    && test -n "$LIBTORCH_DIR" \
-    && cp -a "$LIBTORCH_DIR" /opt/libtorch
+RUN cargo build --release
 
-FROM debian:bookworm-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -37,10 +40,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --home-dir /app --shell /usr/sbin/nologin birefnet
 
+RUN pip install --no-cache-dir torch torchvision
+
 WORKDIR /app
 
 COPY --from=builder /app/target/release/birefnet /usr/local/bin/birefnet
-COPY --from=builder /opt/libtorch /opt/libtorch
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
@@ -49,8 +53,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 
 ENV BIND_ADDR=0.0.0.0:3000
 ENV BIREFNET_MODEL_DIR=/app/models
-ENV LIBTORCH=/opt/libtorch
-ENV LD_LIBRARY_PATH=/opt/libtorch/lib
+ENV LIBTORCH_USE_PYTORCH=1
+ENV LIBTORCH_BYPASS_VERSION_CHECK=1
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.13/site-packages/torch/lib:/usr/local/lib
+ENV PYTHON_LIBRARY_PATH=/usr/local/lib/libpython3.13.so.1.0
+ENV TORCHVISION_LIBRARY_PATH=/usr/local/lib/python3.13/site-packages/torchvision/_C.so
 
 EXPOSE 3000
 

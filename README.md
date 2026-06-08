@@ -2,7 +2,7 @@
 
 Rust web UI and HTTP API for batch background removal with BiRefNet TorchScript models.
 
-The application is designed for Docker deployment. The final image contains the Rust binary and libtorch C++ only. It does not ship Python, PyTorch from pip, torchvision, user uploads, or BiRefNet model files.
+The application is designed for Docker deployment. The final image contains the Rust binary plus the Python `torch` / `torchvision` runtime needed by the exported BiRefNet TorchScript models. It does not ship user uploads or BiRefNet model files.
 
 ## Features
 
@@ -63,7 +63,7 @@ License note: the upstream BiRefNet GitHub repository is MIT licensed, and the m
 
 ### Export TorchScript Models
 
-There is no official public URL for ready-to-use BiRefNet TorchScript `.ts` artifacts. The repo provides a separate exporter image that uses Python only during export. The application runtime image remains Python-free.
+There is no official public URL for ready-to-use BiRefNet TorchScript `.ts` artifacts. The repo provides a separate exporter image that uses Python during export. The runtime image also includes Python `torchvision` because current BiRefNet TorchScript exports still reference custom `torchvision` ops such as `deform_conv2d`.
 
 You should not store these `.ts` files as normal Git-tracked files in the repository itself. GitHub enforces a 100 MiB single-object limit for regular Git objects, and these model files are much larger. If you want simple `wget` downloads, host the exported `.ts` files outside normal Git history, for example as release assets or on object storage.
 
@@ -277,33 +277,30 @@ docker compose up -d birefnet-ui
 
 The Dockerfile is multi-stage:
 
-- Builder stage: `rust:1-bookworm`
-- Runtime stage: `debian:bookworm-slim`
+- Builder stage: `python:3.13-slim`
+- Runtime stage: `python:3.13-slim`
 
-During the build, Cargo compiles the Rust app with:
+During the build, Cargo compiles the Rust app against the Python-installed PyTorch runtime:
 
 ```bash
-cargo build --release --features download-libtorch
+cargo build --release
 ```
 
-That enables `tch/download-libtorch`, so libtorch C++ is downloaded during the build. The final runtime image receives:
+The final runtime image receives:
 
 - `/usr/local/bin/birefnet`
-- `/opt/libtorch`
 - `docker-entrypoint.sh`
+- Python `torch`
+- Python `torchvision`
 - minimal Debian runtime libraries
 
 The final image does not include:
 
-- Python
-- pip
-- PyTorch Python wheels
-- torchvision
 - model files
 - local `target/`
 - local `models/`
 
-Alpine is intentionally not used because official libtorch binaries target glibc, while Alpine uses musl. `debian:bookworm-slim` is the safer minimal runtime base for this stack.
+Alpine is intentionally not used because the PyTorch / torchvision runtime stack for these models targets glibc, while Alpine uses musl.
 
 ### Docker Entrypoint
 
@@ -519,13 +516,15 @@ Docker is preferred. For local Rust development:
 ```
 
 `run.sh` uses `LIBTORCH` if it is set. Otherwise it builds with `download-libtorch`.
+For this project, `LIBTORCH_USE_PYTORCH=1` is the most reliable local mode when using BiRefNet models that depend on `torchvision` custom ops.
 
 Manual equivalent:
 
 ```bash
+LIBTORCH_USE_PYTORCH=1 \
 LIBTORCH_BYPASS_VERSION_CHECK=1 \
 BIREFNET_MODELS='birefnet-base|BiRefNet Base|models/birefnet-base.ts' \
-cargo run --release --features download-libtorch
+cargo run --release
 ```
 
 Run checks:

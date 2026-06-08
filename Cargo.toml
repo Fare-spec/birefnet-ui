@@ -9,6 +9,7 @@ axum = { version = "0.8", features = ["multipart"] }
 bytes = "1"
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+libloading = { version = "0.8", optional = true }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 tch = { version = "0.24", optional = true }
@@ -21,5 +22,5 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [features]
 default = ["tch-backend"]
-tch-backend = ["dep:tch"]
+tch-backend = ["dep:libloading", "dep:tch"]
 download-libtorch = ["tch-backend", "tch/download-libtorch"]
