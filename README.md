@@ -375,6 +375,113 @@ docker run -d \
 
 Then configure your reverse proxy to forward HTTPS traffic to `127.0.0.1:3000`.
 
+## NixOS Auto Setup
+
+On NixOS, you can let systemd run the model exporter once, then start the UI container. This does not require cloning the repository on the server.
+
+Example `configuration.nix`:
+
+```nix
+{ pkgs, ... }:
+
+{
+  virtualisation.docker.enable = true;
+
+  systemd.services.birefnet-model-export = {
+    description = "Export BiRefNet TorchScript models into a Docker volume";
+    after = [ "docker.service" "network-online.target" ];
+    wants = [ "network-online.target" ];
+    requires = [ "docker.service" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+
+    path = [ pkgs.docker pkgs.coreutils ];
+
+    script = ''
+      set -eu
+
+      docker volume create birefnet-models >/dev/null
+      docker volume create birefnet-export-cache >/dev/null
+
+      if docker run --rm \
+        -v birefnet-models:/app/models \
+        alpine sh -c 'test -s /app/models/birefnet-lite.ts -a -s /app/models/birefnet-base.ts -a -s /app/models/birefnet-hr.ts'; then
+        echo "BiRefNet TorchScript models already exist."
+        exit 0
+      fi
+
+      docker run --rm \
+        -v birefnet-models:/app/models \
+        alpine sh -c 'rm -f /app/models/birefnet-*.ts'
+
+      docker run --rm \
+        -v birefnet-models:/app/models \
+        -v birefnet-export-cache:/cache \
+        ghcr.io/fare-spec/birefnet-ui:model-exporter-main
+    '';
+  };
+
+  systemd.services.birefnet-ui = {
+    description = "BiRefNet UI Docker container";
+    after = [ "docker.service" "birefnet-model-export.service" ];
+    requires = [ "docker.service" "birefnet-model-export.service" ];
+    wantedBy = [ "multi-user.target" ];
+
+    path = [ pkgs.docker pkgs.coreutils ];
+
+    preStart = ''
+      docker rm -f birefnet-ui 2>/dev/null || true
+      docker pull ghcr.io/fare-spec/birefnet-ui:main
+    '';
+
+    script = ''
+      exec docker run --rm \
+        --name birefnet-ui \
+        -p 127.0.0.1:3000:3000 \
+        -v birefnet-models:/app/models:ro \
+        ghcr.io/fare-spec/birefnet-ui:main
+    '';
+
+    serviceConfig = {
+      ExecStop = "${pkgs.docker}/bin/docker stop birefnet-ui";
+      Restart = "always";
+      RestartSec = "10s";
+    };
+  };
+}
+```
+
+Apply it:
+
+```bash
+sudo nixos-rebuild switch
+```
+
+Watch the exporter logs:
+
+```bash
+journalctl -u birefnet-model-export.service -f
+```
+
+Watch the app logs:
+
+```bash
+journalctl -u birefnet-ui.service -f
+```
+
+If you need to regenerate the models:
+
+```bash
+sudo systemctl stop birefnet-ui.service
+docker run --rm -v birefnet-models:/app/models alpine sh -c 'rm -f /app/models/birefnet-*.ts'
+sudo systemctl restart birefnet-model-export.service
+sudo systemctl restart birefnet-ui.service
+```
+
 ## GitHub Container Registry
 
 The repository includes a GitHub Actions workflow that builds and publishes both Docker images to GHCR on pushes to `main`.
