@@ -1,172 +1,257 @@
-# BiRefNet Rust
+# BiRefNet UI
 
-Serveur Rust inspire du prototype FastAPI du repertoire parent.
+Rust web UI and HTTP API for batch background removal with BiRefNet TorchScript models.
 
-Fonctionnalites:
+The application is designed for Docker deployment. The final image contains the Rust binary and libtorch C++ only. It does not ship Python, PyTorch from pip, torchvision, user uploads, or BiRefNet model files.
 
-- upload d'une ou plusieurs images dans une seule requete;
-- choix d'un fond `transparent`, `white`, `black` ou `image`;
-- interface avec apercu avant/apres;
-- API multi-images avec ZIP si plusieurs images sont envoyees;
-- telechargement direct du PNG si une seule image est envoyee;
-- choix du modele dans l'interface et l'API;
-- traitement parallele quand plusieurs images sont envoyees;
-- sortie PNG lossless aux dimensions de l'image d'origine;
-- option ZIP dans l'interface;
-- suppression individuelle ou globale des images selectionnees ou deja traitees;
-- les metadonnees EXIF/GPS d'origine ne sont pas recopiees dans les sorties PNG;
-- les dates des entrees ZIP sont neutralisees a `1980-01-01 00:00:00`;
-- l'interface verifie le transport avant upload: HTTPS est accepte, localhost est accepte, HTTP distant est bloque;
-- aucune image utilisateur n'est ecrite sur disque par l'application;
-- les buffers d'entree et les buffers intermediaires sont remis a zero explicitement quand ils sortent du pipeline.
+## Features
 
-Le backend BiRefNet utilise `tch-rs`, donc libtorch. Le runtime Docker n'embarque pas Python: il charge uniquement des modeles BiRefNet deja exportes en TorchScript (`.ts`).
+- Upload one or many images.
+- Select one of several BiRefNet models from the UI or API.
+- Before/after preview for every image.
+- Transparent, white, black, or custom image background.
+- Parallel batch processing.
+- Original output dimensions preserved.
+- PNG output with lossless encoding.
+- Per-image download and download-all ZIP.
+- Delete one processed image without losing the other processed outputs.
+- Delete all selected/processed images.
+- Source EXIF/GPS/device metadata is not copied into output PNG files.
+- ZIP entry timestamps are normalized to `1980-01-01 00:00:00`.
+- No user image is written to disk by the application.
+- Input/intermediate buffers are wiped when they leave the processing path.
+- The UI blocks uploads from remote plain HTTP origins. Use HTTPS in production.
 
-## Modeles
+## How It Works
 
-Les fichiers `.ts` ne doivent pas etre ajoutes a Git: ils sont lourds et changent rarement. Trois modes sont supportes:
+The backend is an Axum HTTP server written in Rust. It loads one or more BiRefNet TorchScript `.ts` models with `tch-rs`, which uses libtorch under the hood.
 
-- monter un volume Docker contenant les modeles dans `/app/models`;
-- fournir des URLs via `BIREFNET_MODEL_URLS`, le conteneur les telecharge au demarrage si elles ne sont pas deja presentes;
-- definir directement `BIREFNET_MODELS` avec des chemins locaux.
+At startup:
 
-Format de `BIREFNET_MODEL_URLS`:
+1. The server reads `BIREFNET_MODELS` or `BIREFNET_TORCHSCRIPT_PATH`.
+2. Each configured TorchScript model is loaded into memory.
+3. `/models` exposes the model list to the UI.
+4. `/ui` serves the browser interface.
+5. `/ui/process` and `/birefnet/remove-background` process multipart image uploads.
+
+For each image:
+
+1. The image is decoded in memory.
+2. A `1024x1024` copy is used only for model inference.
+3. The predicted mask is resized back to the original image size.
+4. The original pixels are reused with the generated alpha mask.
+5. The result is optionally composited onto a selected background.
+6. A fresh PNG is encoded from RGBA pixels, without copying source metadata.
+
+When several images are selected in the UI, the browser sends several requests in parallel. The server-side batch API also uses Rayon for multi-image processing.
+
+## Models
+
+Do not commit `.ts` model files to Git. They are large and should be treated as deployment artifacts.
+
+Supported model provisioning modes:
+
+- Mount TorchScript model files into `/app/models`.
+- Set `BIREFNET_MODEL_URLS` so the container downloads models at startup.
+- Set `BIREFNET_MODELS` manually with exact local paths.
+
+`BIREFNET_MODEL_URLS` format:
 
 ```text
 id|label|url[|filename];id2|label2|url2[|filename2]
 ```
 
-Exemple:
+Example:
 
 ```bash
 BIREFNET_MODEL_URLS='birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts'
 ```
 
-Format de `BIREFNET_MODELS`:
+`BIREFNET_MODELS` format:
 
 ```text
 id|label|path;id2|label2|path2
 ```
 
-## Lancer
-
-Le backend `tch-rs` est active par defaut. Docker est le chemin recommande. En local, `run.sh` utilise `LIBTORCH` si la variable est definie; sinon il compile avec la feature `download-libtorch`, comme le Dockerfile.
-
-Pour lancer en local avec les modeles presents dans `models/`:
+Example:
 
 ```bash
-./run.sh
+BIREFNET_MODELS='birefnet-lite|BiRefNet Lite|/app/models/birefnet-lite.ts;birefnet-base|BiRefNet Base|/app/models/birefnet-base.ts'
 ```
 
-Equivalent manuel:
+If files are mounted in `/app/models`, these standard filenames are detected automatically:
 
-```bash
-LIBTORCH_BYPASS_VERSION_CHECK=1 \
-BIREFNET_MODELS='birefnet-base|BiRefNet Base|models/birefnet.ts' \
-cargo run --release --features download-libtorch
+```text
+birefnet-base.ts
+birefnet-lite.ts
+birefnet-hr.ts
 ```
-
-`LIBTORCH_BYPASS_VERSION_CHECK=1` evite un blocage strict de version si vous fournissez votre propre libtorch.
-
-Pour compiler et tester:
-
-```bash
-./check.sh
-```
-
-Le traitement multi-images utilise un pool de threads. Pour limiter la concurrence, par exemple sur une machine avec peu de RAM:
-
-```bash
-RAYON_NUM_THREADS=2 ./run.sh
-```
-
-## Qualite d'image
-
-L'inference redimensionne seulement l'image d'entree du modele en `1024x1024` pour calculer le masque. Le rendu final reutilise les pixels originaux et conserve les dimensions d'origine. La sortie est un PNG lossless, necessaire pour conserver la transparence.
-
-Si un fond image est applique, il est redimensionne en mode `contain`: le fond complet reste visible et n'est pas coupe.
-
-Les sorties sont encodees depuis les pixels RGBA en memoire avec un encodeur PNG neuf. Les metadonnees de l'image source, comme EXIF/GPS, profil appareil, commentaires ou date de creation, ne sont pas recopiees. Les archives ZIP generent une date neutre fixe (`1980-01-01 00:00:00`) au lieu de reprendre la date source ou la date de traitement.
-
-## Confidentialite du transport
-
-L'interface affiche l'etat du transport avant upload. Elle autorise `https://` et `http://localhost` / `http://127.0.0.1`, puis bloque un upload depuis une origine HTTP distante, car dans ce cas les images transiteraient sans chiffrement TLS. En production, placez le service derriere un reverse proxy HTTPS.
 
 ## Docker
 
-Construire l'image depuis ce sous-repertoire:
+Build from this directory:
 
 ```bash
-docker build -t birefnet-rust .
+docker build -t birefnet-ui .
 ```
 
-Le build Docker utilise `tch/download-libtorch`, donc il telecharge libtorch C++ pendant la compilation. Python, PyTorch pip et torchvision ne sont pas installes dans l'image finale.
-
-Alpine n'est pas utilise: les binaires libtorch officiels ciblent glibc, alors qu'Alpine utilise musl. `debian:bookworm-slim` est le compromis le plus simple et fiable.
-
-Lancer avec un volume local de modeles:
+Run with local model files:
 
 ```bash
 docker run --rm \
   -p 3000:3000 \
   -v "$PWD/models:/app/models:ro" \
-  birefnet-rust
+  birefnet-ui
 ```
 
-Lancer en telechargeant les modeles au demarrage:
+Run with model download at container startup:
 
 ```bash
 docker run --rm \
   -p 3000:3000 \
   -v birefnet-models:/app/models \
   -e 'BIREFNET_MODEL_URLS=birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts' \
-  birefnet-rust
+  birefnet-ui
 ```
 
-Pour un serveur distant, exposez le conteneur derriere un reverse proxy HTTPS. L'UI bloque les uploads depuis une origine HTTP distante.
-
-```text
-http://127.0.0.1:3000/ui
-```
-
-Si vous montez des fichiers dans `/app/models`, les noms standards sont detectes automatiquement:
-
-```text
-models/birefnet-base.ts
-models/birefnet-lite.ts
-models/birefnet-hr.ts
-```
-
-Sinon, declarez explicitement les chemins:
+Run with explicit mounted paths:
 
 ```bash
 docker run --rm \
   -p 3000:3000 \
   -v "$PWD/private-models:/models:ro" \
   -e 'BIREFNET_MODELS=birefnet-lite|BiRefNet Lite|/models/lite.ts;birefnet-base|BiRefNet Base|/models/base.ts' \
-  birefnet-rust
+  birefnet-ui
 ```
 
-`BIREFNET_TORCHSCRIPT_PATH=models/birefnet.ts` reste supporte pour un seul modele, mais `BIREFNET_MODELS` est le format conseille. Sans modele BiRefNet configure, le serveur refuse de demarrer.
-
-Par defaut, le serveur ecoute sur:
-
-```text
-http://127.0.0.1:3000
-```
-
-Pour choisir une autre adresse:
-
-```bash
-BIND_ADDR=127.0.0.1:8080 cargo run
-```
-
-## Interface Web
-
-Ouvrir:
+Open:
 
 ```text
 http://127.0.0.1:3000/ui
+```
+
+### What The Docker Image Contains
+
+The Dockerfile is multi-stage:
+
+- Builder stage: `rust:1-bookworm`
+- Runtime stage: `debian:bookworm-slim`
+
+During the build, Cargo compiles the Rust app with:
+
+```bash
+cargo build --release --features download-libtorch
+```
+
+That enables `tch/download-libtorch`, so libtorch C++ is downloaded during the build. The final runtime image receives:
+
+- `/usr/local/bin/birefnet`
+- `/opt/libtorch`
+- `docker-entrypoint.sh`
+- minimal Debian runtime libraries
+
+The final image does not include:
+
+- Python
+- pip
+- PyTorch Python wheels
+- torchvision
+- model files
+- local `target/`
+- local `models/`
+
+Alpine is intentionally not used because official libtorch binaries target glibc, while Alpine uses musl. `debian:bookworm-slim` is the safer minimal runtime base for this stack.
+
+### Docker Entrypoint
+
+`docker-entrypoint.sh` runs before the Rust binary.
+
+It does the following:
+
+1. Creates `BIREFNET_MODEL_DIR`, defaulting to `/app/models`.
+2. Downloads models declared in `BIREFNET_MODEL_URLS` if they are missing.
+3. Builds `BIREFNET_MODELS` automatically from downloaded files.
+4. Detects standard mounted model filenames if `BIREFNET_MODELS` is still empty.
+5. Refuses to start if no model is configured.
+6. Starts the Rust server.
+
+This keeps the image small enough to publish normally while keeping heavy models outside Git and outside the image.
+
+## Remote Server Deployment
+
+For a remote server, run the container behind an HTTPS reverse proxy. The UI allows:
+
+- `https://...`
+- `http://localhost`
+- `http://127.0.0.1`
+
+It blocks uploads from remote `http://...` origins because those uploads would not be protected by TLS.
+
+Example with a reverse proxy:
+
+```text
+Internet -> HTTPS reverse proxy -> http://127.0.0.1:3000 inside Docker host
+```
+
+Container command:
+
+```bash
+docker run -d \
+  --name birefnet-ui \
+  --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  -v birefnet-models:/app/models \
+  -e 'BIREFNET_MODEL_URLS=birefnet-lite|BiRefNet Lite|https://example.com/models/birefnet-lite.ts|birefnet-lite.ts' \
+  ghcr.io/fare-spec/birefnet-ui:main
+```
+
+Then configure your reverse proxy to forward HTTPS traffic to `127.0.0.1:3000`.
+
+## GitHub Container Registry
+
+The repository includes a GitHub Actions workflow that builds and publishes the Docker image to GHCR on pushes to `main`.
+
+Expected image name:
+
+```text
+ghcr.io/fare-spec/birefnet-ui:main
+```
+
+If the package is private, authenticate before pulling:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u Fare-spec --password-stdin
+docker pull ghcr.io/fare-spec/birefnet-ui:main
+```
+
+## Local Development
+
+Docker is preferred. For local Rust development:
+
+```bash
+./run.sh
+```
+
+`run.sh` uses `LIBTORCH` if it is set. Otherwise it builds with `download-libtorch`.
+
+Manual equivalent:
+
+```bash
+LIBTORCH_BYPASS_VERSION_CHECK=1 \
+BIREFNET_MODELS='birefnet-base|BiRefNet Base|models/birefnet-base.ts' \
+cargo run --release --features download-libtorch
+```
+
+Run checks:
+
+```bash
+./check.sh
+```
+
+Limit CPU concurrency on small servers:
+
+```bash
+RAYON_NUM_THREADS=2 ./run.sh
 ```
 
 ## API
@@ -177,26 +262,30 @@ Endpoint:
 POST /birefnet/remove-background
 ```
 
-Champs multipart:
+Multipart fields:
 
-- `images`, `files` ou `file`: une ou plusieurs images;
-- `model`: identifiant expose par `/models`, par exemple `birefnet-base`, `birefnet-lite` ou `birefnet-hr`;
-- `bg_mode`: `transparent`, `white`, `black` ou `image`;
-- `background_image`: image de fond, requise si `bg_mode=image`.
+- `images`, `files`, or `file`: one or more image files.
+- `model`: model id exposed by `/models`, for example `birefnet-lite`.
+- `bg_mode`: `transparent`, `white`, `black`, or `image`.
+- `background_image`: required when `bg_mode=image`.
 
-Exemple:
+Example:
 
 ```bash
 curl \
   -F 'images=@photo-1.jpg' \
   -F 'images=@photo-2.jpg' \
-  -F 'model=birefnet-base' \
+  -F 'model=birefnet-lite' \
   -F 'bg_mode=image' \
   -F 'background_image=@background.jpg' \
   http://127.0.0.1:3000/birefnet/remove-background \
   --output results.zip
 ```
 
-## Confidentialite et memoire
+Single-image requests return a PNG. Multi-image requests return a ZIP.
 
-L'application ne persiste pas les uploads, les resultats ou l'image de fond. Les donnees restent en memoire pendant la requete. Les buffers manipulables par l'application sont zeroises apres traitement; le buffer final reste necessaire jusqu'a l'envoi HTTP du telechargement, puis il est libere par le serveur.
+## Privacy And Memory
+
+The application does not persist uploads, outputs, or background images. Data stays in memory during processing. Buffers controlled by the application are zeroized after processing; the final response buffer remains in memory only until the HTTP download is sent and released by the server.
+
+Output PNG files are encoded from pixels with a new encoder. Source EXIF/GPS/device metadata, comments, and source creation dates are not copied. ZIP entries use the neutral timestamp `1980-01-01 00:00:00`.
