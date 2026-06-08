@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+
+FROM python:3.13-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HF_HOME=/cache/huggingface
+ENV TORCH_HOME=/cache/torch
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+        accelerate \
+        einops \
+        kornia \
+        pillow \
+        safetensors \
+        timm \
+        torch \
+        torchvision \
+        transformers
+
+WORKDIR /app
+
+COPY scripts/export_birefnet_torchscript.py /usr/local/bin/export-birefnet-models
+
+RUN chmod +x /usr/local/bin/export-birefnet-models \
+    && mkdir -p /app/models /cache \
+    && chmod -R 777 /app/models /cache
+
+VOLUME ["/app/models", "/cache"]
+
+CMD ["export-birefnet-models", "--output-dir", "/app/models"]

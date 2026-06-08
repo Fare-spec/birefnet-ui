@@ -61,6 +61,44 @@ Important: `BIREFNET_MODEL_URLS` must point to exported TorchScript `.ts` files,
 
 License note: the upstream BiRefNet GitHub repository is MIT licensed, and the main `ZhengPeng7/BiRefNet` plus `ZhengPeng7/BiRefNet_HR` Hugging Face pages show `License: mit`. The `BiRefNet_lite` page is part of the same official BiRefNet model family, but its crawled Hugging Face page does not display a license badge. For commercial use, keep a copy of the upstream license notice and verify the exact artifact you deploy.
 
+### Export TorchScript Models
+
+There is no official public URL for ready-to-use BiRefNet TorchScript `.ts` artifacts. The repo provides a separate exporter image that uses Python only during export. The application runtime image remains Python-free.
+
+Build the exporter:
+
+```bash
+docker build -f Dockerfile.models -t birefnet-model-exporter .
+```
+
+Export the three default models into the same Docker volume used by the app:
+
+```bash
+docker run --rm \
+  -v birefnet-models:/app/models \
+  -v birefnet-export-cache:/cache \
+  birefnet-model-exporter
+```
+
+This writes:
+
+```text
+/app/models/birefnet-lite.ts
+/app/models/birefnet-base.ts
+/app/models/birefnet-hr.ts
+```
+
+Exporting downloads the official Hugging Face `.safetensors` source weights and traces them to TorchScript. It can take time and several GB of disk space/RAM, especially for Base and HR.
+
+To force regeneration:
+
+```bash
+docker run --rm \
+  -v birefnet-models:/app/models \
+  -v birefnet-export-cache:/cache \
+  birefnet-model-exporter --force
+```
+
 Supported model provisioning modes:
 
 - Mount TorchScript model files into `/app/models`.
@@ -180,6 +218,45 @@ services:
 ```
 
 The `127.0.0.1:3000:3000` binding is intentional for remote servers: expose the app through an HTTPS reverse proxy instead of publishing plain HTTP directly to the internet.
+
+Compose setup using Docker volumes and the exporter:
+
+```yaml
+services:
+  export-models:
+    build:
+      context: .
+      dockerfile: Dockerfile.models
+    profiles: ["export"]
+    volumes:
+      - birefnet-models:/app/models
+      - birefnet-export-cache:/cache
+
+  birefnet-ui:
+    image: ghcr.io/fare-spec/birefnet-ui:main
+    container_name: birefnet-ui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - birefnet-models:/app/models:ro
+
+volumes:
+  birefnet-models:
+  birefnet-export-cache:
+```
+
+Run the exporter once:
+
+```bash
+docker compose --profile export run --rm export-models
+```
+
+Then start the app:
+
+```bash
+docker compose up -d birefnet-ui
+```
 
 ### What The Docker Image Contains
 
