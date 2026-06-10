@@ -13,8 +13,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use memory::WipeOnDrop;
 use processing::{
-    Background, InputImage, ModelOption, ModelRegistry, decode_background_image, process_images,
-    require_images, sanitize_filename, zip_images,
+    Background, InputImage, ModelOption, ModelRegistry, decode_background_image, parse_hex_color,
+    process_images, require_images, sanitize_filename, zip_images,
 };
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
@@ -123,6 +123,10 @@ async fn handle_multipart(state: &AppState, mut multipart: Multipart) -> anyhow:
     let mut inputs = Vec::new();
     let mut background_mode = "transparent".to_string();
     let mut background_image: Option<WipeOnDrop<Vec<u8>>> = None;
+    let mut background_color = "#ffffff".to_string();
+    let mut gradient_inner_color = "#ffffff".to_string();
+    let mut gradient_outer_color = "#000000".to_string();
+    let mut gradient_direction = "center-out".to_string();
     let mut model_name = "edge-color".to_string();
 
     while let Some(field) = multipart.next_field().await? {
@@ -147,6 +151,30 @@ async fn handle_multipart(state: &AppState, mut multipart: Multipart) -> anyhow:
                     background_image = Some(WipeOnDrop::new(bytes.to_vec()));
                 }
             }
+            "background_color" => {
+                background_color = String::from_utf8(bytes.to_vec())
+                    .unwrap_or_else(|_| "#ffffff".to_string())
+                    .trim()
+                    .to_string();
+            }
+            "gradient_inner_color" => {
+                gradient_inner_color = String::from_utf8(bytes.to_vec())
+                    .unwrap_or_else(|_| "#ffffff".to_string())
+                    .trim()
+                    .to_string();
+            }
+            "gradient_outer_color" => {
+                gradient_outer_color = String::from_utf8(bytes.to_vec())
+                    .unwrap_or_else(|_| "#000000".to_string())
+                    .trim()
+                    .to_string();
+            }
+            "gradient_direction" => {
+                gradient_direction = String::from_utf8(bytes.to_vec())
+                    .unwrap_or_else(|_| "center-out".to_string())
+                    .trim()
+                    .to_lowercase();
+            }
             "bg_mode" => {
                 background_mode = String::from_utf8(bytes.to_vec())
                     .unwrap_or_else(|_| "transparent".to_string())
@@ -167,6 +195,12 @@ async fn handle_multipart(state: &AppState, mut multipart: Multipart) -> anyhow:
         "transparent" => Background::Transparent,
         "white" => Background::White,
         "black" => Background::Black,
+        "color" => Background::Color(parse_hex_color(&background_color)?),
+        "gradient" => Background::RadialGradient {
+            inner: parse_hex_color(&gradient_inner_color)?,
+            outer: parse_hex_color(&gradient_outer_color)?,
+            invert: matches!(gradient_direction.as_str(), "outside-in"),
+        },
         "image" => {
             let bytes = background_image
                 .as_ref()
@@ -444,6 +478,29 @@ const INDEX_HTML: &str = r##"<!doctype html>
     .grid {
       display: grid;
       gap: 14px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .inline-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .hidden-block[hidden] {
+      display: none;
+    }
+
+    input[type="color"] {
+      min-height: 44px;
+      padding: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--surface-3);
     }
 
     .actions {
@@ -748,14 +805,45 @@ const INDEX_HTML: &str = r##"<!doctype html>
             <option value="transparent">Transparent</option>
             <option value="white">Blanc</option>
             <option value="black">Noir</option>
+            <option value="color">Couleur RGB</option>
+            <option value="gradient">Gradient radial</option>
             <option value="image">Image de fond</option>
           </select>
           </label>
 
-          <label>
+          <label id="background-image-group" class="hidden-block" hidden>
             Image de fond
             <input type="file" name="background_image" accept="image/*">
           </label>
+
+          <div id="background-color-group" class="stack hidden-block" hidden>
+            <label>
+              Couleur
+              <input type="color" name="background_color" value="#f5f7fa">
+            </label>
+          </div>
+
+          <div id="gradient-group" class="stack hidden-block" hidden>
+            <div class="inline-grid">
+              <label>
+                Centre
+                <input type="color" name="gradient_inner_color" value="#f5f7fa">
+              </label>
+
+              <label>
+                Bord
+                <input type="color" name="gradient_outer_color" value="#111821">
+              </label>
+            </div>
+
+            <label>
+              Sens
+              <select name="gradient_direction">
+                <option value="center-out">Interieur vers exterieur</option>
+                <option value="outside-in">Exterieur vers interieur</option>
+              </select>
+            </label>
+          </div>
         </div>
 
         <div id="progress-wrap" class="progress-wrap" hidden>
@@ -800,6 +888,10 @@ const INDEX_HTML: &str = r##"<!doctype html>
     const securityLabel = document.querySelector("#security-label");
     const zipDownload = document.querySelector("#zip-download");
     const clearAll = document.querySelector("#clear-all");
+    const bgModeSelect = form.querySelector("[name='bg_mode']");
+    const backgroundImageGroup = document.querySelector("#background-image-group");
+    const backgroundColorGroup = document.querySelector("#background-color-group");
+    const gradientGroup = document.querySelector("#gradient-group");
     const secondaryActions = document.querySelector("#secondary-actions");
     const progressWrap = document.querySelector("#progress-wrap");
     const progressLabel = document.querySelector("#progress-label");
@@ -993,7 +1085,16 @@ const INDEX_HTML: &str = r##"<!doctype html>
       }
     }
 
+    function updateBackgroundControls() {
+      const mode = bgModeSelect.value;
+      backgroundImageGroup.hidden = mode !== "image";
+      backgroundColorGroup.hidden = mode !== "color";
+      gradientGroup.hidden = mode !== "gradient";
+    }
+
     updateSecurityStatus();
+    updateBackgroundControls();
+    bgModeSelect.addEventListener("change", updateBackgroundControls);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1018,6 +1119,10 @@ const INDEX_HTML: &str = r##"<!doctype html>
         const model = form.querySelector("[name='model']").value;
         const bgMode = form.querySelector("[name='bg_mode']").value;
         const background = form.querySelector("[name='background_image']").files[0];
+        const backgroundColor = form.querySelector("[name='background_color']").value;
+        const gradientInnerColor = form.querySelector("[name='gradient_inner_color']").value;
+        const gradientOuterColor = form.querySelector("[name='gradient_outer_color']").value;
+        const gradientDirection = form.querySelector("[name='gradient_direction']").value;
         const pairs = [...results.querySelectorAll(".pair")];
 
         await runWithConcurrency(selectedFiles.map((file, index) => async () => {
@@ -1028,6 +1133,10 @@ const INDEX_HTML: &str = r##"<!doctype html>
             model,
             bgMode,
             background,
+            backgroundColor,
+            gradientInnerColor,
+            gradientOuterColor,
+            gradientDirection,
             onUploadProgress: (loaded) => {
               uploadProgress[index] = Math.min(file.size, loaded);
               const totalLoaded = uploadProgress.reduce((sum, value) => sum + value, 0);
@@ -1161,6 +1270,10 @@ const INDEX_HTML: &str = r##"<!doctype html>
         body.append("images", file, file.name);
         body.append("model", options.model);
         body.append("bg_mode", options.bgMode);
+        body.append("background_color", options.backgroundColor);
+        body.append("gradient_inner_color", options.gradientInnerColor);
+        body.append("gradient_outer_color", options.gradientOuterColor);
+        body.append("gradient_direction", options.gradientDirection);
         if (options.background) {
           body.append("background_image", options.background, options.background.name);
         }

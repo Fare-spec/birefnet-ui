@@ -19,6 +19,12 @@ pub enum Background {
     Transparent,
     White,
     Black,
+    Color(Rgba<u8>),
+    RadialGradient {
+        inner: Rgba<u8>,
+        outer: Rgba<u8>,
+        invert: bool,
+    },
     Image(DynamicImage),
 }
 
@@ -435,6 +441,12 @@ pub fn apply_background(foreground: RgbaImage, background: &Background) -> RgbaI
         Background::Transparent => foreground,
         Background::White => composite_on_solid(foreground, Rgba([255, 255, 255, 255])),
         Background::Black => composite_on_solid(foreground, Rgba([0, 0, 0, 255])),
+        Background::Color(color) => composite_on_solid(foreground, *color),
+        Background::RadialGradient {
+            inner,
+            outer,
+            invert,
+        } => composite_on_gradient(foreground, *inner, *outer, *invert),
         Background::Image(bg) => composite_on_image(foreground, bg),
     }
 }
@@ -475,6 +487,18 @@ pub fn zip_images(images: &[ProcessedImage]) -> Result<Vec<u8>> {
 
 pub fn decode_background_image(bytes: &[u8]) -> Result<DynamicImage> {
     image::load_from_memory(bytes).context("image de fond invalide")
+}
+
+pub fn parse_hex_color(value: &str) -> Result<Rgba<u8>> {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!("couleur hex invalide: {value}"));
+    }
+
+    let red = u8::from_str_radix(&hex[0..2], 16)?;
+    let green = u8::from_str_radix(&hex[2..4], 16)?;
+    let blue = u8::from_str_radix(&hex[4..6], 16)?;
+    Ok(Rgba([red, green, blue, 255]))
 }
 
 pub fn sanitize_filename(name: &str) -> String {
@@ -522,6 +546,48 @@ fn composite_on_image(foreground: RgbaImage, background: &DynamicImage) -> RgbaI
     image::imageops::overlay(&mut fitted, &foreground, 0, 0);
     force_opaque(&mut fitted);
     fitted
+}
+
+fn composite_on_gradient(
+    foreground: RgbaImage,
+    inner: Rgba<u8>,
+    outer: Rgba<u8>,
+    invert: bool,
+) -> RgbaImage {
+    let (width, height) = foreground.dimensions();
+    let mut background = RgbaImage::new(width, height);
+    let center_x = (width.saturating_sub(1)) as f32 / 2.0;
+    let center_y = (height.saturating_sub(1)) as f32 / 2.0;
+    let max_distance = (center_x.powi(2) + center_y.powi(2)).sqrt().max(1.0);
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - center_x;
+            let dy = y as f32 - center_y;
+            let mut t = (dx.mul_add(dx, dy * dy)).sqrt() / max_distance;
+            if invert {
+                t = 1.0 - t;
+            }
+            background.put_pixel(x, y, mix_rgba(inner, outer, t.clamp(0.0, 1.0)));
+        }
+    }
+
+    image::imageops::overlay(&mut background, &foreground, 0, 0);
+    force_opaque(&mut background);
+    background
+}
+
+fn mix_rgba(a: Rgba<u8>, b: Rgba<u8>, t: f32) -> Rgba<u8> {
+    let mix = |left: u8, right: u8| -> u8 {
+        ((left as f32 * (1.0 - t)) + (right as f32 * t)).round() as u8
+    };
+
+    Rgba([
+        mix(a.0[0], b.0[0]),
+        mix(a.0[1], b.0[1]),
+        mix(a.0[2], b.0[2]),
+        255,
+    ])
 }
 
 fn force_opaque(image: &mut RgbaImage) {
@@ -676,5 +742,29 @@ mod tests {
         assert_eq!(output.dimensions(), (100, 100));
         assert!(output.get_pixel(2, 50).0[0] > 200);
         assert!(output.get_pixel(97, 50).0[1] > 200);
+    }
+
+    #[test]
+    fn parse_hex_color_accepts_rgb_hex() {
+        assert_eq!(
+            parse_hex_color("#12abEF").expect("hex"),
+            Rgba([0x12, 0xab, 0xef, 255])
+        );
+    }
+
+    #[test]
+    fn radial_gradient_background_varies_from_center_to_edge() {
+        let foreground = RgbaImage::from_pixel(9, 9, Rgba([0, 0, 0, 0]));
+        let output = apply_background(
+            foreground,
+            &Background::RadialGradient {
+                inner: Rgba([255, 0, 0, 255]),
+                outer: Rgba([0, 0, 255, 255]),
+                invert: false,
+            },
+        );
+
+        assert!(output.get_pixel(4, 4).0[0] > output.get_pixel(0, 0).0[0]);
+        assert!(output.get_pixel(0, 0).0[2] > output.get_pixel(4, 4).0[2]);
     }
 }
