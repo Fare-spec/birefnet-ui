@@ -2,6 +2,8 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 #[cfg(feature = "tch-backend")]
 use std::path::PathBuf;
+#[cfg(feature = "tch-backend")]
+use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
 use image::codecs::png::PngEncoder;
@@ -176,6 +178,10 @@ fn find_python_library() -> Option<PathBuf> {
         return Some(path);
     }
 
+    if let Some(path) = find_python_library_from_env_python() {
+        return Some(path);
+    }
+
     if let Some(venv) = std::env::var_os("VIRTUAL_ENV").map(PathBuf::from) {
         if let Some(path) = find_python_in_venv(&venv) {
             return Some(path);
@@ -195,6 +201,30 @@ fn find_python_library() -> Option<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .find(|candidate| candidate.exists())
+}
+
+#[cfg(feature = "tch-backend")]
+fn find_python_library_from_env_python() -> Option<PathBuf> {
+    let python = std::env::var_os("VIRTUAL_ENV")
+        .map(PathBuf::from)
+        .map(|venv| venv.join("bin").join("python"))
+        .filter(|python| python.exists())?;
+
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import sysconfig; print((sysconfig.get_config_var('LIBDIR') or '') + '/' + (sysconfig.get_config_var('LDLIBRARY') or ''))",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = PathBuf::from(path.trim());
+    path.exists().then_some(path)
 }
 
 #[cfg(feature = "tch-backend")]
