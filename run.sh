@@ -28,6 +28,10 @@ export BIND_ADDR="${BIND_ADDR:-0.0.0.0:3000}"
 
 cargo build --release $FEATURES
 
+if [ -n "${LIBTORCH_USE_PYTORCH:-}" ]; then
+    exec target/release/birefnet
+fi
+
 if [ -z "${LIBTORCH:-}" ]; then
     LIBTORCH="$(find target/release/build -path '*/out/libtorch/libtorch' -type d | head -n 1)"
     if [ -z "$LIBTORCH" ]; then
