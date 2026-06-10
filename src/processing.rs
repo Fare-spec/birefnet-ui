@@ -149,6 +149,16 @@ fn find_torchvision_library() -> Option<PathBuf> {
         return Some(path);
     }
 
+    if let Some(venv) = std::env::var_os("VIRTUAL_ENV").map(PathBuf::from) {
+        if let Some(path) = find_torchvision_in_venv(&venv) {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) = find_torchvision_in_venv(Path::new("../.venv")) {
+        return Some(path);
+    }
+
     let candidates = [
         "/usr/local/lib/python3.13/site-packages/torchvision/_C.so",
         "/usr/local/lib/python3.12/site-packages/torchvision/_C.so",
@@ -166,6 +176,16 @@ fn find_python_library() -> Option<PathBuf> {
         return Some(path);
     }
 
+    if let Some(venv) = std::env::var_os("VIRTUAL_ENV").map(PathBuf::from) {
+        if let Some(path) = find_python_in_venv(&venv) {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) = find_python_in_venv(Path::new("../.venv")) {
+        return Some(path);
+    }
+
     let candidates = [
         "/usr/local/lib/libpython3.13.so.1.0",
         "/usr/local/lib/libpython3.12.so.1.0",
@@ -175,6 +195,53 @@ fn find_python_library() -> Option<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .find(|candidate| candidate.exists())
+}
+
+#[cfg(feature = "tch-backend")]
+fn find_torchvision_in_venv(venv: &Path) -> Option<PathBuf> {
+    let lib = venv.join("lib");
+    let entries = std::fs::read_dir(lib).ok()?;
+
+    for entry in entries.flatten() {
+        let candidate = entry
+            .path()
+            .join("site-packages")
+            .join("torchvision")
+            .join("_C.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "tch-backend")]
+fn find_python_in_venv(venv: &Path) -> Option<PathBuf> {
+    let lib = venv.join("lib");
+    let entries = std::fs::read_dir(lib).ok()?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let candidate = path.join("libpython3.13.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        let candidate = path.join("libpython3.13.so.1.0");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        let candidate = path.join("libpython3.12.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        let candidate = path.join("libpython3.12.so.1.0");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 #[cfg(feature = "tch-backend")]
